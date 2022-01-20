@@ -1,0 +1,37 @@
+#! /bin/bash
+
+set -e
+
+LAST_PATCH=$(cat /usr/local/etc/cibi/patch.state)
+LATEST_BUILD=$(curl -s 'https://download.lineageos.org/api/v1/FP3/nightly/changelog' | jq '.response[-1]')
+BUILD_DATE=$(echo $LATEST_BUILD | jq -r '.datetime')
+
+changelog=$(curl -s 'https://download.lineageos.org/api/v1/changes/FP3/-1/' | jq )
+next=$(echo $changelog | jq -r '.last')
+for i in {1..30}; do
+    # Encountered last known patch level. Exiting..
+    if echo "$changelog" | grep -q "\"subject\": \"$LAST_PATCH\",$"; then
+        exit 0
+    fi
+
+    # If a new security string commit is found this means the patch level was bumped
+    if echo "$changelog" | grep -q '\"subject\": \".*Bump Security String.*\",$'; then
+        commit=$(echo "$changelog" | jq '.res[] | select(.subject | contains("Bump Security String"))')
+
+        submitted=$(echo "$commit" | jq -r '.submitted')
+        patch_level=$(echo "$commit" | jq -r '.subject' | sed 's/.*Bump Security String to \([0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}\).*/\1/g')
+
+        # The commit may not be in the latest build yet. This is only really relevant to include patches
+        # from the vendor blobs, which are not as frequent. Hence the date comparison being optional.
+        ENFORCE_BUILD_DATE=false
+        if ((submitted < BUILD_DATE)) || ! $ENFORCE_BUILD_DATE; then
+            notify-send "New build available for security patch $patch_level"
+            echo "Bump Security String to $patch_level" > /usr/local/etc/cibi/patch.state
+        fi
+
+        exit 0
+    fi
+
+    changelog=$(curl -s "https://download.lineageos.org/api/v1/changes/FP3/$((${next}-1))/" | jq)
+    next=$(echo $changelog | jq -r '.last')
+done
